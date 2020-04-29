@@ -1203,6 +1203,10 @@ class AgoraRtcEngine {
   static Future<void> switchCamera() async {
     await _channel.invokeMethod('switchCamera');
   }
+  
+  static Future<void> screenshare() async {
+    await _channel.invokeMethod("screenshare");
+  }
 
   // Miscellaneous Methods
   /// Gets the SDK version.

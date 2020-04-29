@@ -1,16 +1,38 @@
 package io.agora.agorartcengine;
 
+import android.Manifest;
+import android.app.Activity;
+import android.app.Application;
+import android.app.Fragment;
+import android.app.FragmentTransaction;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
 import android.graphics.Rect;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
+import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
+import android.os.RemoteException;
+import android.os.ResultReceiver;
+import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.SurfaceView;
+import android.view.WindowManager;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.agora.advancedvideo.externvideosource.IExternalVideoInputService;
 import io.agora.rtc.IRtcEngineEventHandler;
 import io.agora.rtc.RtcEngine;
 import io.agora.rtc.internal.LastmileProbeConfig;
@@ -24,6 +46,7 @@ import io.agora.rtc.video.ChannelMediaRelayConfiguration;
 import io.agora.rtc.video.VideoCanvas;
 import io.agora.rtc.video.VideoEncoderConfiguration;
 import io.agora.rtc.video.WatermarkOptions;
+import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.EventChannel;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
@@ -37,11 +60,42 @@ import io.flutter.plugin.common.StandardMessageCodec;
  */
 public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.StreamHandler {
 
+    static public final String TAG = AgoraRtcEnginePlugin.class.getSimpleName();
+    static final int minAPILevel = Build.VERSION_CODES.LOLLIPOP;
+
+    public static final int TYPE_LOCAL_VIDEO = 1;
+    public static final int TYPE_SCREEN_SHARE = 2;
+    public static final int TYPE_AR_CORE = 3;
+
+    public static final String FLAG_VIDEO_PATH = "flag-local-video";
+    public static final String FLAG_SCREEN_WIDTH = "screen-width";
+    public static final String FLAG_SCREEN_HEIGHT = "screen-height";
+    public static final String FLAG_SCREEN_DPI = "screen-dpi";
+    public static final String FLAG_FRAME_RATE = "screen-frame-rate";
+
+    private static final int DEFAULT_SCREEN_WIDTH = 640;
+    private static final int DEFAULT_SCREEN_HEIGHT = 480;
+    private static final int DEFAULT_SCREEN_DPI = 3;
+    private static final int DEFAULT_FRAME_RATE = 15;
+    private static final int DEFAULT_SHARE_FRAME_RATE = 15;
+    private static final int PROJECTION_REQ_CODE = 1 << 2;
+
     private final Registrar mRegistrar;
     private static RtcEngine mRtcEngine;
     private HashMap<String, SurfaceView> mRendererViews;
     private Handler mEventHandler = new Handler(Looper.getMainLooper());
     private EventChannel.EventSink sink;
+
+
+    private static final String PERMISSION_AUDIO = Manifest.permission.RECORD_AUDIO;
+    private static final String PERMISSION_VIDEO = Manifest.permission.CAMERA;
+    private static final String PERMISSION_SCREEN = "android.permission.MediaProjection";
+    private static int CAPTURE_PERMISSION_REQUEST_CODE = 1;
+    private static final String GRANT_RESULTS = "GRANT_RESULT";
+    private static final String PERMISSIONS = "PERMISSION";
+    private static final String PROJECTION_DATA = "PROJECTION_DATA";
+    private static final String RESULT_RECEIVER = "RESULT_RECEIVER";
+    private static final String REQUEST_CODE = "REQUEST_CODE";
 
     void addView(SurfaceView view, int id) {
         mRendererViews.put("" + id, view);
@@ -74,16 +128,31 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
         AgoraRenderViewFactory fac = new AgoraRenderViewFactory(StandardMessageCodec.INSTANCE,
                 plugin);
         registrar.platformViewRegistry().registerViewFactory("AgoraRendererView", fac);
-    }
 
+    }
+    static Context context;
     private AgoraRtcEnginePlugin(Registrar registrar) {
         this.mRegistrar = registrar;
         this.sink = null;
         this.mRendererViews = new HashMap<>();
+        context = mRegistrar.activity().getApplication();
+
     }
 
     private Context getActiveContext() {
         return (mRegistrar.activity() != null) ? mRegistrar.activity() : mRegistrar.context();
+    }
+
+    public Context getApplicationContext() {
+        return mRegistrar.activity().getApplication();
+    }
+
+    public  Context getContext() {
+        return mRegistrar.context();
+    }
+
+    public Activity getActivity(){
+        return mRegistrar.activity();
     }
 
     private AgoraImage createAgoraImage(Map<String, Object> options) {
@@ -97,7 +166,7 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
     }
 
     @Override
-    public void onMethodCall(MethodCall call, Result result) {
+    public void onMethodCall(MethodCall call, final Result result) {
         Context context = getActiveContext();
 
         switch (call.method) {
@@ -113,6 +182,7 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
             }
             break;
             case "destroy": {
+                unbindVideoService();
                 RtcEngine.destroy();
                 result.success(null);
             }
@@ -134,10 +204,12 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
                 String channel = call.argument("channelId");
                 String info = call.argument("info");
                 int uid = call.argument("uid");
+                bindVideoService();
                 result.success(mRtcEngine.joinChannel(token, channel, info, uid) >= 0);
             }
             break;
             case "leaveChannel": {
+                unbindVideoService();
                 result.success(mRtcEngine.leaveChannel() >= 0);
             }
             break;
@@ -491,6 +563,7 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
                 result.success(null);
             }
             break;
+
 
             case "setLiveTranscoding": {
                 LiveTranscoding transcoding = new LiveTranscoding();
@@ -1047,6 +1120,30 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
                 result.success(res);
             }
             break;
+
+            case "screenshare":
+
+                screenRequestPremissions(new ResultReceiver(new Handler(Looper.getMainLooper())) {
+                    @Override
+                    protected void onReceiveResult(
+                            int requestCode,
+                            Bundle resultData) {
+
+                        /* Create ScreenCapture */
+                        int resultCode = resultData.getInt(GRANT_RESULTS);
+                        Intent mediaProjectionData = resultData.getParcelable(PROJECTION_DATA);
+
+                        if (resultCode != Activity.RESULT_OK) {
+                            result.error(null, "User didn't give permission to capture the screen.", null);
+                            return;
+                        }
+
+                        Log.d(TAG, "onReceiveResult: bindvideoservice Triggered");
+                        startScreenShare(mediaProjectionData);
+                        result.success(null);
+                    }
+                });
+                break;
 
             default:
                 result.notImplemented();
@@ -1752,4 +1849,159 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
             });
         }
     }
+
+    public void screenRequestPremissions(ResultReceiver resultReceiver){
+        Activity activity = getActivity();
+
+        Bundle args = new Bundle();
+        args.putParcelable(RESULT_RECEIVER, resultReceiver);
+        args.putInt(REQUEST_CODE, CAPTURE_PERMISSION_REQUEST_CODE);
+
+        ScreenRequestPermissionsFragment fragment = new ScreenRequestPermissionsFragment();
+        fragment.setArguments(args);
+
+        FragmentTransaction transaction
+                = activity.getFragmentManager().beginTransaction().add(
+                fragment,
+                fragment.getClass().getName());
+
+        try {
+            transaction.commit();
+        } catch (IllegalStateException ise) {
+
+        }
+    }
+
+    public static class ScreenRequestPermissionsFragment extends Fragment {
+
+        private  ResultReceiver resultReceiver = null;
+        private  int requestCode = 0;
+        private int resultCode = 0;
+
+        private void checkSelfPermissions(boolean requestPermissions) {
+            if(resultCode != Activity.RESULT_OK) {
+                Activity activity = this.getActivity();
+                Bundle args = getArguments();
+                resultReceiver = args.getParcelable(RESULT_RECEIVER);
+                requestCode = args.getInt(REQUEST_CODE);
+                requestStart(activity, requestCode);
+            }
+        }
+
+        public void requestStart(Activity activity, int requestCode) {
+            if (android.os.Build.VERSION.SDK_INT < minAPILevel) {
+                Log.w(TAG, "Can't run requestStart() due to a low API level. API level 21 or higher is required.");
+                return;
+            } else {
+                MediaProjectionManager mediaProjectionManager =
+                        (MediaProjectionManager) activity.getSystemService(
+                                Context.MEDIA_PROJECTION_SERVICE);
+
+                // call for the projection manager
+                this.startActivityForResult(
+                        mediaProjectionManager.createScreenCaptureIntent(), requestCode);
+            }
+        }
+
+        @Override
+        public void onActivityResult(int requestCode, int resultCode, Intent data) {
+            super.onActivityResult(requestCode, resultCode, data);
+            resultCode = resultCode;
+            String[] permissions;
+            if (resultCode != Activity.RESULT_OK) {
+                finish();
+                Bundle resultData = new Bundle();
+                resultData.putString(PERMISSIONS, PERMISSION_SCREEN);
+                resultData.putInt(GRANT_RESULTS, resultCode);
+                resultReceiver.send(requestCode, resultData);
+                return;
+            }
+            Bundle resultData = new Bundle();
+            resultData.putString(PERMISSIONS, PERMISSION_SCREEN);
+            resultData.putInt(GRANT_RESULTS, resultCode);
+            resultData.putParcelable(PROJECTION_DATA, data);
+            resultReceiver.send(requestCode, resultData);
+            finish();
+        }
+
+        private void finish() {
+            Activity activity = getActivity();
+            if (activity != null) {
+                activity.getFragmentManager().beginTransaction()
+                        .remove(this)
+                        .commitAllowingStateLoss();
+            }
+        }
+
+        @Override
+        public void onResume() {
+            super.onResume();
+            checkSelfPermissions(/* requestPermissions */ true);
+        }
+    }
+
+    private void startScreenShare(Intent data) {
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager wm = (WindowManager) context
+                .getSystemService(Context.WINDOW_SERVICE);
+        wm.getDefaultDisplay().getMetrics(metrics);
+        data.putExtra(FLAG_SCREEN_WIDTH, metrics.widthPixels);
+        data.putExtra(FLAG_SCREEN_HEIGHT, metrics.heightPixels);
+        data.putExtra(FLAG_SCREEN_DPI, (int) metrics.density);
+        data.putExtra(FLAG_FRAME_RATE, DEFAULT_SHARE_FRAME_RATE);
+
+        setVideoConfig(TYPE_SCREEN_SHARE, metrics.widthPixels, metrics.heightPixels);
+        try {
+            mService.setExternalVideoInput(TYPE_SCREEN_SHARE, data);
+            Log.d(TAG, "startScreenShare: AgoraRtcEnginePlugin ");
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+    private IExternalVideoInputService mService;
+    private VideoInputServiceConnection mServiceConnection;
+
+    private void bindVideoService() {
+        Intent intent = new Intent();
+        intent.setClass(context, ExternalVideoInputService.class);
+        mServiceConnection = new VideoInputServiceConnection();
+        context.bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE);
+    }
+    private void unbindVideoService() {
+        context.unbindService(mServiceConnection);
+    }
+    private class VideoInputServiceConnection implements ServiceConnection {
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+            mService = (IExternalVideoInputService) iBinder;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            mService = null;
+        }
+    }
+
+    private void setVideoConfig(int sourceType, int width, int height) {
+        VideoEncoderConfiguration.ORIENTATION_MODE mode;
+        switch (sourceType) {
+            case TYPE_LOCAL_VIDEO:
+                mode = VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_FIXED_LANDSCAPE;
+                break;
+            case TYPE_SCREEN_SHARE:
+                mode = VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_FIXED_PORTRAIT;
+                break;
+            default:
+                mode = VideoEncoderConfiguration.ORIENTATION_MODE.ORIENTATION_MODE_ADAPTIVE;
+                break;
+
+        }
+
+        mRtcEngine.setVideoEncoderConfiguration(new VideoEncoderConfiguration(
+                new VideoEncoderConfiguration.VideoDimensions(width, height),
+                VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_15,
+                VideoEncoderConfiguration.STANDARD_BITRATE, mode
+        ));
+    }
+
 }

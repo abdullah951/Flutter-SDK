@@ -73,7 +73,8 @@ class _AgoraRenderWidgetState extends State<AgoraRenderWidget> {
   void _bindView() {
     if (widget.local) {
       AgoraRtcEngine.setupLocalVideo(_viewId, widget.mode);
-      if (widget.preview) AgoraRtcEngine.startPreview();
+      if (widget.preview)
+        AgoraRtcEngine.startPreview();
     } else {
       AgoraRtcEngine.setupRemoteVideo(_viewId, widget.mode, widget.uid);
     }
