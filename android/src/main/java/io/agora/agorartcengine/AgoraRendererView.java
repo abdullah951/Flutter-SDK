@@ -21,4 +21,5 @@ public class AgoraRendererView implements PlatformView  {
 
   @Override
   public void dispose() {}
+
 }

@@ -494,6 +494,7 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
                 mRtcEngine.enableSoundPositionIndication(enabled);
                 result.success(null);
             }
+
             break;
             case "setRemoteVoicePosition": {
                 int uid = call.argument("uid");
@@ -2002,6 +2003,7 @@ public class AgoraRtcEnginePlugin implements MethodCallHandler, EventChannel.Str
                 VideoEncoderConfiguration.FRAME_RATE.FRAME_RATE_FPS_15,
                 VideoEncoderConfiguration.STANDARD_BITRATE, mode
         ));
+        mRtcEngine.setExternalVideoSource(true, true, true);
     }
 
 }

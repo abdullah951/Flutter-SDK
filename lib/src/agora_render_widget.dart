@@ -58,7 +58,7 @@ class _AgoraRenderWidgetState extends State<AgoraRenderWidget> {
   void didUpdateWidget(AgoraRenderWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if ((widget.uid != oldWidget.uid || widget.local != oldWidget.local) &&
+    if ((widget.uid != oldWidget.uid || widget.local != oldWidget.local || widget.preview != oldWidget.preview) &&
         _viewId != null) {
       _bindView();
       return;

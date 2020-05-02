@@ -279,7 +279,6 @@ class _CallPageState extends State<CallPage> {
   }
 
   void _onCallEnd(BuildContext context) {
-
     Navigator.pop(context);
   }
 
@@ -302,7 +301,7 @@ class _CallPageState extends State<CallPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Agora Flutter QuickStart'),
+        title: Text('Agora Video Calling'),
       ),
       backgroundColor: Colors.black,
       body: Center(

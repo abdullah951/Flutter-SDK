@@ -647,7 +647,7 @@ class AgoraRtcEngine {
   /// This method resets the internal engine and takes some time to take effect. Agora recommends using the following API methods to control the video engine modules separately:
   /// [enableLocalVideo], [muteLocalVideoStream], [muteRemoteVideoStream], [muteAllRemoteVideoStreams].
   static Future<void> enableVideo() async {
-    await _channel.invokeMethod('enableVideo');
+      await _channel.invokeMethod('enableVideo');
   }
 
   /// Disables the video module.
